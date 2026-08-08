@@ -18,22 +18,37 @@ import com.ciphershare.android.util.Formatters
 
 @Composable
 fun IncomingTransferDialog(request: TransferRequest, onAccept: () -> Unit, onDecline: () -> Unit) {
+    val isClipboard = request.payloadKind != "Files"
+
     AlertDialog(
         onDismissRequest = onDecline,
         containerColor = CipherShareColors.Surface,
-        title = { Text("Incoming transfer", color = CipherShareColors.TextPrimary) },
+        title = { Text(if (isClipboard) "Incoming clipboard content" else "Incoming transfer", color = CipherShareColors.TextPrimary) },
         text = {
             Column {
-                Text(
-                    "${request.senderName} (${request.senderIp}) wants to send you ${request.files.size} item(s), ${Formatters.formatBytes(request.totalSize)}.",
-                    color = CipherShareColors.TextSecondary
-                )
-                Spacer()
-                request.files.take(5).forEach {
-                    Text("• ${it.relativePath}", color = CipherShareColors.TextMuted, modifier = Modifier.padding(top = 2.dp))
-                }
-                if (request.files.size > 5) {
-                    Text("...and ${request.files.size - 5} more", color = CipherShareColors.TextMuted, modifier = Modifier.padding(top = 2.dp))
+                if (isClipboard) {
+                    val kind = if (request.payloadKind == "ClipboardImage") "an image" else "text"
+                    Text(
+                        "${request.senderName} (${request.senderIp}) wants to copy $kind to your clipboard, ${Formatters.formatBytes(request.totalSize)}.",
+                        color = CipherShareColors.TextSecondary
+                    )
+                    Spacer()
+                    Text(
+                        "Accepting will replace whatever is currently on your clipboard.",
+                        color = CipherShareColors.TextMuted
+                    )
+                } else {
+                    Text(
+                        "${request.senderName} (${request.senderIp}) wants to send you ${request.files.size} item(s), ${Formatters.formatBytes(request.totalSize)}.",
+                        color = CipherShareColors.TextSecondary
+                    )
+                    Spacer()
+                    request.files.take(5).forEach {
+                        Text("• ${it.relativePath}", color = CipherShareColors.TextMuted, modifier = Modifier.padding(top = 2.dp))
+                    }
+                    if (request.files.size > 5) {
+                        Text("...and ${request.files.size - 5} more", color = CipherShareColors.TextMuted, modifier = Modifier.padding(top = 2.dp))
+                    }
                 }
             }
         },

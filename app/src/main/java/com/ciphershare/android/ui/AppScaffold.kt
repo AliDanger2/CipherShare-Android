@@ -88,6 +88,14 @@ fun AppScaffold() {
     val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val target = sendTarget
         if (target != null && uris.isNotEmpty()) {
+            uris.forEach { uri ->
+                try {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: Exception) {
+                    // Some providers don't support persistable grants - the file can still be sent now,
+                    // it just won't be reopenable from History once this permission ages out.
+                }
+            }
             appState.sendFiles(target, StorageUtils.expandPickedFiles(context, uris))
         }
         sendTarget = null
@@ -190,7 +198,8 @@ fun AppScaffold() {
                     )
                     Screen.DEVICES -> DevicesScreen(
                         onSendFiles = ::startSendFiles,
-                        onSendFolder = ::startSendFolder
+                        onSendFolder = ::startSendFolder,
+                        onSendClipboard = { appState.sendClipboard(it) }
                     )
                     Screen.QUEUE -> QueueScreen()
                     Screen.HISTORY -> HistoryScreen()

@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 /**
@@ -86,13 +88,30 @@ class AppState private constructor(private val context: Context) {
     private val _notificationEvents = MutableStateFlow<AppNotification?>(null)
     val notificationEvents: StateFlow<AppNotification?> = _notificationEvents.asStateFlow()
 
-    private var initialized = false
+    private var dataLoaded = false
     private var staleSweepJob: Job? = null
 
-    /** Safe to call multiple times - only the first call does anything. */
+    /**
+     * Guards every start()/stop()/restart() call against discoveryService and transferServer.
+     * Without this, the several independent triggers that can each decide networking needs a
+     * fresh start - MainActivity.onResume(), the runtime-permission-grant callback, and the
+     * connectivity NetworkCallback (which runs on its own background thread, not this class's
+     * scope thread) - could interleave their stop()/start() pairs on the same shared socket
+     * objects. The result was non-deterministic: whichever call's start() lost the race left
+     * transferServer sitting stopped with nothing left to restart it, so that device could no
+     * longer be connected to (though it could still connect out, since that doesn't touch this
+     * state) until the app was fully restarted. Routing every mutation through this mutex
+     * makes them queue instead of interleave.
+     */
+    private val networkMutex = Mutex()
+
+    /** Safe to call multiple times - only the first call does anything. Loads persisted data
+     *  once per process and gives networking its first start. Does NOT need to run again just
+     *  because networking was later torn down (see shutdownNetworking()/ensureNetworkingStarted()
+     *  below) - those are intentionally independent of this one-time data load. */
     fun initialize() {
-        if (initialized) return
-        initialized = true
+        if (dataLoaded) return
+        dataLoaded = true
 
         scope.launch {
             val loadedSettings = settingsRepository.current()
@@ -103,13 +122,40 @@ class AppState private constructor(private val context: Context) {
             _localIp.value = NetworkUtils.getLocalIPv4()
 
             wireCallbacks()
-            startNetworking()
             startStaleSweep()
             registerConnectivityCallback()
 
             // Keep persisted settings in sync with in-memory state for other collectors.
             launch {
                 settingsRepository.settingsFlow.collect { _settings.value = it }
+            }
+
+            startNetworking()
+        }
+    }
+
+    /**
+     * (Re)starts discovery + the transfer server if they aren't already running. Safe to call
+     * any time after initialize() - in particular, the foreground service calls this from its
+     * own onCreate() so networking comes back up after shutdownNetworking() tore it down (e.g.
+     * the previous time the user swiped the app away). A no-op while initialize()'s own data
+     * load is still in flight; that coroutine starts networking itself once it's done, so this
+     * would otherwise race the very load it depends on (identity, settings).
+     */
+    fun ensureNetworkingStarted() {
+        if (!dataLoaded) return
+        scope.launch { networkMutex.withLock { startNetworkingLocked() } }
+    }
+
+    /** Stops discovery + the transfer server and releases their sockets. Called when the
+     *  foreground service is going away (task removed) so CipherShare actually stops running -
+     *  and being discoverable/reachable - once the user closes it, instead of lingering in the
+     *  background indefinitely. */
+    fun shutdownNetworking() {
+        scope.launch {
+            networkMutex.withLock {
+                discoveryService.stop()
+                transferServer.stop()
             }
         }
     }
@@ -142,9 +188,19 @@ class AppState private constructor(private val context: Context) {
             // just be a duplicate. Transfer complete/failed notifications still flow through here.
             if (!isIncomingRequest) pushNotification(AppNotificationType.INCOMING_TRANSFER, title, message)
         }
+        transferServer.onClipboardReceived = { payloadKind, bytes, senderName ->
+            pendingClipboard.set(PendingClipboard(payloadKind, bytes, senderName))
+        }
     }
 
+    /** Called once, from within initialize()'s own coroutine, to give networking its first
+     *  start. Goes through the same mutex as every other entry point below - harmless here
+     *  since nothing else can be running yet, but keeps this consistent with the rest. */
     private fun startNetworking() {
+        scope.launch { networkMutex.withLock { startNetworkingLocked() } }
+    }
+
+    private fun startNetworkingLocked() {
         val id = _identity.value ?: return
         val current = _settings.value
         if (current.autoDiscovery) {
@@ -153,12 +209,20 @@ class AppState private constructor(private val context: Context) {
         transferServer.start(scope, current.networkPort)
     }
 
+    /** Triggered from several independent places (permission grants, network changes, settings
+     *  changes) that can't coordinate with each other directly - the mutex is what keeps their
+     *  stop()/start() pairs from interleaving. See networkMutex's doc comment for what went
+     *  wrong without it. */
     fun restartNetworking() {
-        val id = _identity.value ?: return
-        val current = _settings.value
-        discoveryService.restart(scope, current, id)
-        transferServer.stop()
-        transferServer.start(scope, current.networkPort)
+        scope.launch {
+            networkMutex.withLock {
+                val id = _identity.value ?: return@withLock
+                val current = _settings.value
+                discoveryService.restart(scope, current, id)
+                transferServer.stop()
+                transferServer.start(scope, current.networkPort)
+            }
+        }
     }
 
     /**
@@ -316,6 +380,88 @@ class AppState private constructor(private val context: Context) {
             } finally {
                 TransferSessionRegistry.unregister(transferId)
             }
+        }
+    }
+
+    /**
+     * Sends whatever is currently on this device's clipboard (text only - see the note below)
+     * so it lands directly on the target device's clipboard, without ever being saved as a
+     * file. Only text is supported from the Android side: unlike WPF's Clipboard.GetImage(),
+     * Android's ClipData has no single "give me the raw image bytes" accessor - an image entry
+     * is a content:// URI in an arbitrary format the source app chose, so reliably reading and
+     * re-encoding it would need per-provider/per-format handling. Receiving a ClipboardImage
+     * payload sent *from* desktop is still fully supported - see util.ClipboardUtils.
+     */
+    fun sendClipboard(target: DeviceModel) {
+        val id = _identity.value ?: return
+        val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+        val clip = clipboardManager?.primaryClip
+        if (clip == null || clip.itemCount == 0) {
+            pushNotification(AppNotificationType.TRANSFER_FAILED, "Nothing to send", "The clipboard is empty.")
+            return
+        }
+        val text = clip.getItemAt(0).coerceToText(context)?.toString()
+        if (text.isNullOrEmpty()) {
+            pushNotification(AppNotificationType.TRANSFER_FAILED, "Nothing to send", "The clipboard doesn't contain text CipherShare can send.")
+            return
+        }
+        val bytes = text.toByteArray(Charsets.UTF_8)
+
+        val transferId = UUID.randomUUID().toString()
+        val session = TransferSession(transferId, isSender = true)
+        TransferSessionRegistry.register(session)
+
+        session.job = scope.launch {
+            try {
+                transferClient.sendClipboard(
+                    transferId = transferId,
+                    targetDeviceId = target.id,
+                    targetDeviceName = target.name,
+                    targetIp = target.ipAddress,
+                    targetPort = target.transferPort,
+                    payloadKind = "ClipboardText",
+                    fileName = "Clipboard.txt",
+                    bytes = bytes,
+                    identity = id,
+                    settings = _settings.value,
+                    session = session
+                ) { updated ->
+                    addOrUpdateTransfer(updated)
+                    if (updated.status == TransferStatus.COMPLETED && _settings.value.notifyTransferComplete) {
+                        pushNotification(AppNotificationType.TRANSFER_COMPLETE, "Transfer complete", "Sent clipboard text to ${target.name}")
+                    } else if (updated.status == TransferStatus.FAILED && _settings.value.notifyTransferFailed) {
+                        pushNotification(AppNotificationType.TRANSFER_FAILED, "Transfer failed", "${updated.displayName}: ${updated.errorMessage}")
+                    }
+                }
+            } finally {
+                TransferSessionRegistry.unregister(transferId)
+            }
+        }
+    }
+
+    /**
+     * Clipboard content received from another device, held until the app's UI can actually
+     * apply it - see applyPendingClipboardIfAny() below for why this hand-off exists at all.
+     */
+    private class PendingClipboard(val payloadKind: String, val bytes: ByteArray, val senderName: String)
+
+    private val pendingClipboard = java.util.concurrent.atomic.AtomicReference<PendingClipboard?>(null)
+
+    /**
+     * Re-applies clipboard content that arrived while the app had no window focus to actually
+     * write it. Android silently denies ClipboardManager.setPrimaryClip() from any caller that
+     * isn't the currently focused window (see util.ClipboardUtils's doc comment) - a background
+     * receive can never satisfy that, so TransferServer stashes the bytes via onClipboardReceived
+     * instead of only trying once. MainActivity calls this from onWindowFocusChanged(true), which
+     * fires whether the user opens the app directly or taps the "Transfer complete" notification
+     * that already appears for a completed clipboard transfer - so no extra notification or UI
+     * is needed, this just needs to run once real focus is confirmed. A no-op when nothing's
+     * pending, so it's safe to call on every focus gain.
+     */
+    fun applyPendingClipboardIfAny() {
+        val pending = pendingClipboard.getAndSet(null) ?: return
+        scope.launch {
+            com.ciphershare.android.util.ClipboardUtils.applyClipboardContent(context, pending.payloadKind, pending.bytes)
         }
     }
 

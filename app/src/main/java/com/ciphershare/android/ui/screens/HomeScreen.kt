@@ -1,5 +1,6 @@
 package com.ciphershare.android.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,15 +32,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import com.ciphershare.android.R
 import com.ciphershare.android.model.DeviceModel
 import com.ciphershare.android.model.DeviceStatus
 import com.ciphershare.android.model.TransferDirection
+import com.ciphershare.android.model.TransferModel
+import com.ciphershare.android.model.TransferStatus
 import com.ciphershare.android.ui.LocalAppState
 import com.ciphershare.android.ui.components.CipherCard
 import com.ciphershare.android.ui.components.StatusDot
 import com.ciphershare.android.ui.components.colorForDeviceStatus
 import com.ciphershare.android.ui.theme.CipherShareColors
+import com.ciphershare.android.util.FileOpenUtils
 import com.ciphershare.android.util.Formatters
 
 @Composable
@@ -48,6 +56,8 @@ fun HomeScreen(onSendFilesTo: (DeviceModel) -> Unit, onGoToDevices: () -> Unit) 
     val localIp by appState.localIp.collectAsState()
     val devices by appState.devices.collectAsState()
     val history by appState.history.collectAsState()
+    val settings by appState.settings.collectAsState()
+    val hasCustomDownloadFolder = settings.downloadTreeUri != null
 
     val onlineDevices = devices.filter { it.status == DeviceStatus.ONLINE }
     var showDevicePicker by remember { mutableStateOf(false) }
@@ -131,20 +141,45 @@ fun HomeScreen(onSendFilesTo: (DeviceModel) -> Unit, onGoToDevices: () -> Unit) 
                 Text("Nothing yet - sent and received files will show up here.", style = MaterialTheme.typography.bodyMedium)
             }
         } else {
-            items(history.take(5)) { transfer ->
-                CipherCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(transfer.displayName, style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                if (transfer.direction == TransferDirection.SENT) "Sent to ${transfer.receiverName}" else "Received from ${transfer.senderName}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        Text(Formatters.formatBytes(transfer.totalBytes), style = MaterialTheme.typography.bodySmall)
-                    }
+            items(history.take(5)) { transfer -> RecentActivityRow(transfer, hasCustomDownloadFolder) }
+        }
+    }
+}
+
+@Composable
+private fun RecentActivityRow(transfer: TransferModel, hasCustomDownloadFolder: Boolean) {
+    val context = LocalContext.current
+
+    val singleFileUri = if (transfer.status == TransferStatus.COMPLETED) {
+        if (transfer.direction == TransferDirection.RECEIVED) transfer.receivedFileUris.singleOrNull()
+        else transfer.sourceUris.singleOrNull()
+    } else null
+    val folderUri = if (transfer.status == TransferStatus.COMPLETED && transfer.direction == TransferDirection.RECEIVED) {
+        transfer.destinationFolderUri
+    } else null
+
+    val rowClickable: Modifier = when {
+        singleFileUri != null -> Modifier.clickable { FileOpenUtils.openFile(context, singleFileUri) }
+        folderUri != null -> Modifier.clickable { FileOpenUtils.openFolder(context, folderUri, hasCustomDownloadFolder) }
+        else -> Modifier
+    }
+
+    CipherCard(modifier = Modifier.fillMaxWidth().then(rowClickable)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(transfer.displayName, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (transfer.direction == TransferDirection.SENT) "Sent to ${transfer.receiverName}" else "Received from ${transfer.senderName}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (folderUri != null) {
+                // Same FolderIcon geometry as desktop's TransferRowControl "show in folder" action.
+                IconButton(onClick = { FileOpenUtils.openFolder(context, folderUri, hasCustomDownloadFolder) }) {
+                    Icon(painterResource(R.drawable.ic_cs_folder), contentDescription = "Open containing folder", tint = CipherShareColors.TextSecondary)
                 }
             }
+            Text(Formatters.formatBytes(transfer.totalBytes), style = MaterialTheme.typography.bodySmall)
         }
     }
 }

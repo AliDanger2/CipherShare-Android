@@ -53,6 +53,10 @@ class HistoryStore(context: Context) {
         put("durationSeconds", t.durationSeconds)
         put("errorMessage", t.errorMessage ?: "")
         put("destinationFolder", t.destinationFolder ?: "")
+        put("destinationFolderUri", t.destinationFolderUri ?: "")
+        put("sourceUris", JSONArray(t.sourceUris))
+        put("receivedFileUris", JSONArray(t.receivedFileUris))
+        put("payloadKind", t.payloadKind)
         put("remoteIpAddress", t.remoteIpAddress)
         put("remoteTransferPort", t.remoteTransferPort)
     }
@@ -81,6 +85,10 @@ class HistoryStore(context: Context) {
             durationSeconds = o.optInt("durationSeconds"),
             errorMessage = o.optString("errorMessage").takeIf { it.isNotBlank() },
             destinationFolder = o.optString("destinationFolder").takeIf { it.isNotBlank() },
+            destinationFolderUri = o.optString("destinationFolderUri").takeIf { it.isNotBlank() },
+            sourceUris = o.optJSONArray("sourceUris")?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList(),
+            receivedFileUris = o.optJSONArray("receivedFileUris")?.let { arr -> (0 until arr.length()).map { arr.optString(it) } } ?: emptyList(),
+            payloadKind = o.optString("payloadKind", "Files").ifBlank { "Files" },
             remoteIpAddress = o.optString("remoteIpAddress"),
             remoteTransferPort = o.optInt("remoteTransferPort")
         )

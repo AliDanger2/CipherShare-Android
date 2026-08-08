@@ -24,11 +24,19 @@ private const val STATUS_NOTIFICATION_ID = 1
 private const val EVENT_NOTIFICATION_ID_BASE = 1000
 
 /**
- * Keeps the UDP discovery listener and TCP transfer server alive while the app isn't in the
- * foreground - without this, Android would eventually suspend the process's sockets and the
- * phone would stop being discoverable/reachable a few minutes after the user leaves the app.
- * Mirrors the always-on nature of the desktop app, which keeps running (and discoverable) as
- * long as it's open, including minimized.
+ * Keeps the UDP discovery listener and TCP transfer server alive while the app is backgrounded
+ * but still open (Home button, switched to another app) - without this, Android would
+ * eventually suspend the process's sockets and the phone would stop being discoverable/
+ * reachable a few minutes after the user leaves the app. Mirrors the always-on nature of the
+ * desktop app, which keeps running (and discoverable) as long as it's open, including
+ * minimized.
+ *
+ * That's different from the user actually closing the app (swiping it away from Recents) -
+ * onTaskRemoved() below tears networking down and stops this service at that point, so
+ * CipherShare doesn't linger running and discoverable indefinitely after the user is done
+ * with it. ensureNetworkingStarted()/shutdownNetworking() on AppState are what let this
+ * service's own start/stop cleanly bring networking back up or tear it down, independent of
+ * AppState's one-time data load (see AppState.initialize()'s doc comment).
  *
  * Incoming-transfer requests get their own notification with Accept/Decline buttons right on
  * it (handled by TransferResponseReceiver), built directly from AppState.pendingRequests so it
@@ -48,6 +56,7 @@ class CipherShareService : Service() {
         super.onCreate()
         appState = AppState.getInstance(applicationContext)
         appState.initialize()
+        appState.ensureNetworkingStarted()
 
         startForeground(STATUS_NOTIFICATION_ID, buildStatusNotification("Starting..."))
         observeState()
@@ -55,6 +64,20 @@ class CipherShareService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY
+    }
+
+    /**
+     * Fires when the user swipes CipherShare away from Recents - the clearest signal Android
+     * gives that they're actually done with the app, as opposed to just having navigated away
+     * from it. Stop right away instead of leaving discovery/transfer sockets and the ongoing
+     * notification running in the background indefinitely, which is what made the app look
+     * "stuck open" even after being closed. The actual socket teardown happens in onDestroy(),
+     * which stopSelf() below triggers.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun observeState() {
@@ -173,7 +196,14 @@ class CipherShareService : Service() {
 
         val notification = NotificationCompat.Builder(this, CipherShareApplication.CHANNEL_EVENTS)
             .setContentTitle("Incoming transfer from ${request.senderName}")
-            .setContentText("${request.files.size} item(s), ${Formatters.formatBytes(request.totalSize)}")
+            .setContentText(
+                if (request.payloadKind != "Files") {
+                    val kind = if (request.payloadKind == "ClipboardImage") "an image" else "text"
+                    "Wants to copy $kind to your clipboard, ${Formatters.formatBytes(request.totalSize)}"
+                } else {
+                    "${request.files.size} item(s), ${Formatters.formatBytes(request.totalSize)}"
+                }
+            )
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -203,6 +233,7 @@ class CipherShareService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        appState.shutdownNetworking()
         serviceJob.cancel()
     }
 

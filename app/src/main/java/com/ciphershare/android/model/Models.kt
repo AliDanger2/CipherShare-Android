@@ -83,10 +83,17 @@ data class TransferModel(
     val sourceUris: List<String> = emptyList(),
     /** Human-readable destination description, only populated for received transfers. */
     val destinationFolder: String? = null,
+    /** Openable URI of the folder received files were written into, only populated for received transfers. Lets History offer "open containing folder". */
+    val destinationFolderUri: String? = null,
+    /** Openable URI of each file actually written to disk, in the same order as `files`, only populated for received transfers. Lets History open a single received file directly. */
+    val receivedFileUris: List<String> = emptyList(),
+    /** "Files" (default) or "ClipboardText"/"ClipboardImage" - mirrors WireModels.TransferHeader.payloadKind. Clipboard transfers have nothing on disk/in destinationFolderUri to open. */
+    val payloadKind: String = "Files",
     val remoteIpAddress: String,
     val remoteTransferPort: Int
 ) {
     val itemCount: Int get() = files.size
+    val isClipboard: Boolean get() = payloadKind != "Files"
 }
 
 /** Pending incoming transfer awaiting Accept/Decline. Mirrors Models/TransferRequestModel.cs. */
@@ -96,7 +103,8 @@ data class TransferRequest(
     val senderName: String,
     val senderIp: String,
     val files: List<TransferFileEntry>,
-    val totalSize: Long
+    val totalSize: Long,
+    val payloadKind: String = "Files"
 )
 
 /** Mirrors Models/NotificationModel.cs */

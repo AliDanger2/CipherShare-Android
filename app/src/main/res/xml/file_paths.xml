@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Mirrors StorageUtils.defaultDownloadDir(): getExternalFilesDir(null)/CipherShare -->
+    <external-files-path name="downloads" path="CipherShare/" />
+    <!-- Temp PNG files written by TransferServer.applyClipboardContent() when an incoming
+         clipboard-image transfer needs to be shared as a content:// URI via ClipData. -->
+    <cache-path name="clipboard" path="clipboard/" />
+</paths>

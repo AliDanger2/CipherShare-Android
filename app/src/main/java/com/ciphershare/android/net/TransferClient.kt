@@ -159,5 +159,127 @@ class TransferClient(private val context: Context) {
         val percent = if (total > 0) (transferred.toDouble() / total.toDouble()) * 100.0 else 0.0
         return transfer.copy(progressPercent = percent, transferredBytes = transferred, speedMBps = speedMBps)
     }
+
+    /**
+     * Sends [bytes] (clipboard content already read and encoded by the caller) as a
+     * clipboard-sync payload instead of a real file - the receiving end applies them straight
+     * to its OS clipboard rather than writing anything to disk. Mirrors sendFiles' wire
+     * handshake exactly, just with a ByteArrayInputStream standing in for a file on disk.
+     */
+    suspend fun sendClipboard(
+        transferId: String,
+        targetDeviceId: String,
+        targetDeviceName: String,
+        targetIp: String,
+        targetPort: Int,
+        payloadKind: String,
+        fileName: String,
+        bytes: ByteArray,
+        identity: LocalIdentity,
+        settings: AppSettings,
+        session: TransferSession,
+        onUpdate: (TransferModel) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        val totalSize = bytes.size.toLong()
+        val displayName = if (payloadKind == "ClipboardImage") "Clipboard image" else "Clipboard text"
+
+        var transfer = TransferModel(
+            id = transferId,
+            displayName = displayName,
+            files = listOf(TransferFileEntry(fileName, totalSize)),
+            totalBytes = totalSize,
+            direction = TransferDirection.SENT,
+            status = TransferStatus.ACTIVE,
+            senderId = identity.deviceId,
+            senderName = identity.deviceName,
+            receiverId = targetDeviceId,
+            receiverName = targetDeviceName,
+            startedAtUtcMillis = System.currentTimeMillis(),
+            payloadKind = payloadKind,
+            remoteIpAddress = targetIp,
+            remoteTransferPort = targetPort
+        )
+        onUpdate(transfer)
+
+        val startNanos = System.nanoTime()
+        val socket = Socket()
+        session.socket = socket
+        try {
+            socket.use { s ->
+                s.connect(InetSocketAddress(targetIp, targetPort), 10_000)
+                val input = s.getInputStream()
+                val output = s.getOutputStream()
+
+                val header = TransferHeader(
+                    senderId = identity.deviceId,
+                    senderName = identity.deviceName,
+                    files = listOf(WireFileEntry(fileName, totalSize)),
+                    totalSize = totalSize,
+                    payloadKind = payloadKind
+                )
+                LineProtocol.writeLine(output, header.toJson())
+
+                val response = LineProtocol.readLine(input)
+                if (response != "ACCEPT") {
+                    transfer = transfer.copy(status = TransferStatus.FAILED, errorMessage = "Declined by recipient")
+                    onUpdate(transfer)
+                    return@withContext
+                }
+
+                val throttle = BandwidthThrottle(settings.bandwidthLimitMBps)
+                val chunkSize = (settings.chunkSizeKB.coerceAtLeast(4)) * 1024
+                val buffer = ByteArray(chunkSize)
+                var transferredSoFar = 0L
+                var lastPublish = 0L
+                val digest = MessageDigest.getInstance("SHA-256")
+
+                java.io.ByteArrayInputStream(bytes).use { byteIn ->
+                    var remaining = totalSize
+                    while (remaining > 0) {
+                        session.awaitIfPaused()
+                        coroutineContext.ensureActive()
+
+                        val toRead = minOf(buffer.size.toLong(), remaining).toInt()
+                        val read = byteIn.read(buffer, 0, toRead)
+                        if (read == -1) throw java.io.IOException("Clipboard content ended early")
+
+                        output.write(buffer, 0, read)
+                        digest.update(buffer, 0, read)
+                        remaining -= read
+                        transferredSoFar += read
+                        throttle.waitIfNeeded(read)
+
+                        val now = System.currentTimeMillis()
+                        if (now - lastPublish > 200) {
+                            lastPublish = now
+                            transfer = withProgress(transfer, transferredSoFar, totalSize, startNanos)
+                            onUpdate(transfer)
+                        }
+                    }
+                }
+                output.flush()
+
+                val hashHex = digest.digest().joinToString("") { "%02x".format(it) }
+                LineProtocol.writeLine(output, FileTrailer(fileName, hashHex).toJson())
+                LineProtocol.writeLine(output, COMPLETE_MARKER)
+
+                transfer = transfer.copy(
+                    status = TransferStatus.COMPLETED,
+                    progressPercent = 100.0,
+                    transferredBytes = totalSize,
+                    completedAtUtcMillis = System.currentTimeMillis(),
+                    durationSeconds = ((System.nanoTime() - startNanos) / 1_000_000_000).toInt()
+                )
+                onUpdate(transfer)
+            }
+        } catch (e: Exception) {
+            transfer = if (session.cancelRequested) {
+                transfer.copy(status = TransferStatus.CANCELED, errorMessage = null)
+            } else {
+                transfer.copy(status = TransferStatus.FAILED, errorMessage = e.message ?: "Transfer failed")
+            }
+            onUpdate(transfer)
+        }
+    }
 }
 

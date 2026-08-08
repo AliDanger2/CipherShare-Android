@@ -62,6 +62,19 @@
             android:name=".service.TransferResponseReceiver"
             android:exported="false" />
 
+        <!-- Lets History's "open file" action hand a received file to another app (viewer,
+             gallery, etc.) as a content:// URI when it was saved to the app's own default
+             folder rather than a user-chosen SAF folder. See util/FileOpenUtils.kt. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 
 </manifest>

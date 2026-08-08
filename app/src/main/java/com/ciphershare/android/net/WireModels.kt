@@ -68,13 +68,24 @@ data class TransferHeader(
     val senderId: String,
     val senderName: String,
     val files: List<WireFileEntry>,
-    val totalSize: Long
+    val totalSize: Long,
+    /**
+     * "Files" (default) for a normal file/folder transfer, or "ClipboardText"/"ClipboardImage"
+     * when this is a clipboard-sync payload instead - mirrors desktop's
+     * NetworkProtocol.TransferHeader.PayloadKind exactly, including the PascalCase wire values.
+     * Clipboard payloads still travel as a single synthetic entry in `files` (e.g.
+     * "Clipboard.txt") so the streaming/hashing code is unchanged on both ends - only what
+     * happens with the bytes at the end differs: the receiver sets its OS clipboard instead of
+     * writing anything to disk.
+     */
+    val payloadKind: String = "Files"
 ) {
     fun toJson(): String = JSONObject().apply {
         put("SenderId", senderId)
         put("SenderName", senderName)
         put("Files", JSONArray(files.map { it.toJson() }))
         put("TotalSize", totalSize)
+        put("PayloadKind", payloadKind)
     }.toString()
 
     companion object {
@@ -86,7 +97,8 @@ data class TransferHeader(
                 senderId = o.optString("SenderId", ""),
                 senderName = o.optString("SenderName", "Unknown device"),
                 files = files,
-                totalSize = o.optLong("TotalSize", 0L)
+                totalSize = o.optLong("TotalSize", 0L),
+                payloadKind = o.optString("PayloadKind", "Files").ifBlank { "Files" }
             ).takeIf { it.files.isNotEmpty() }
         } catch (_: Exception) {
             null

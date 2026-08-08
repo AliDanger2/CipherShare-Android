@@ -45,6 +45,13 @@ class MainActivity : ComponentActivity() {
                 ?: results[Manifest.permission.ACCESS_COARSE_LOCATION]
             if (networkPermission == true) {
                 AppState.getInstance(applicationContext).restartNetworking()
+                // The permission dialog dismissing also triggers onResume() below, which would
+                // otherwise see this same grant as "new" a second time (it only learns about
+                // grants through its own before/after check) and fire a redundant second
+                // restart right behind this one. Mark it as already handled. restartNetworking()
+                // is safe to call more than once either way (it's mutex-serialized), but this
+                // avoids two needless back-to-back socket rebinds on every first launch.
+                lastKnownNetworkPermissionState = true
             }
         }
 
@@ -80,6 +87,22 @@ class MainActivity : ComponentActivity() {
             AppState.getInstance(applicationContext).restartNetworking()
         }
         lastKnownNetworkPermissionState = nowGranted
+    }
+
+    /**
+     * A clipboard-sync transfer that arrives while this app has no window focus can't actually
+     * write to the system clipboard yet - Android silently denies it (see
+     * AppState.applyPendingClipboardIfAny's doc comment) - so TransferServer holds the bytes as
+     * "pending" instead. onWindowFocusChanged(true) is the officially-recommended, precise
+     * signal that focus is genuinely established (onResume can fire slightly before that), so
+     * this is where the deferred apply actually happens - whether the user opened the app
+     * directly or got here by tapping the "Transfer complete" notification.
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            AppState.getInstance(applicationContext).applyPendingClipboardIfAny()
+        }
     }
 
     /**

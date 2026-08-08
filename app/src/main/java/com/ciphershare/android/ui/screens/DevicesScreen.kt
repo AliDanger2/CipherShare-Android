@@ -50,7 +50,7 @@ import com.ciphershare.android.ui.theme.CipherShareColors
 import com.ciphershare.android.util.Formatters
 
 @Composable
-fun DevicesScreen(onSendFiles: (DeviceModel) -> Unit, onSendFolder: (DeviceModel) -> Unit) {
+fun DevicesScreen(onSendFiles: (DeviceModel) -> Unit, onSendFolder: (DeviceModel) -> Unit, onSendClipboard: (DeviceModel) -> Unit) {
     val appState = LocalAppState.current
     val devices by appState.devices.collectAsState()
 
@@ -73,6 +73,7 @@ fun DevicesScreen(onSendFiles: (DeviceModel) -> Unit, onSendFolder: (DeviceModel
                 device = device,
                 onSendFiles = { onSendFiles(device) },
                 onSendFolder = { onSendFolder(device) },
+                onSendClipboard = { onSendClipboard(device) },
                 onToggleTrust = { appState.setDeviceTrusted(device.id, !device.isTrusted) },
                 onForget = { appState.forgetDevice(device.id) }
             )
@@ -85,6 +86,7 @@ private fun DeviceCard(
     device: DeviceModel,
     onSendFiles: () -> Unit,
     onSendFolder: () -> Unit,
+    onSendClipboard: () -> Unit,
     onToggleTrust: () -> Unit,
     onForget: () -> Unit
 ) {
@@ -160,6 +162,17 @@ private fun DeviceCard(
                     Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.width(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Send folder")
+                }
+                IconButton(
+                    onClick = onSendClipboard,
+                    enabled = device.status != DeviceStatus.OFFLINE
+                ) {
+                    // Same ClipboardIcon geometry as desktop's DeviceCardControl "send clipboard" button.
+                    Icon(
+                        painterResource(R.drawable.ic_cs_clipboard),
+                        contentDescription = "Send clipboard content to this device",
+                        tint = if (device.status != DeviceStatus.OFFLINE) CipherShareColors.TextSecondary else CipherShareColors.TextMuted
+                    )
                 }
             }
         }

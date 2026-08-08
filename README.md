@@ -1,33 +1,35 @@
 # CipherShare for Android
 
-CipherShare for Android is the official mobile companion to CipherShare Desktop, enabling fast, direct file transfers between Android devices and computers over a local network.
+CipherShare for Android is the official mobile companion to CipherShare Desktop, enabling fast, direct file and clipboard transfers between Android devices and computers over a local network.
 
-Built around the same protocol as the desktop application, CipherShare allows devices on the same LAN to automatically discover one another and transfer files without requiring cloud services, accounts, or an internet connection.
+Built around the same protocol as the desktop application, CipherShare allows devices on the same LAN to automatically discover one another and transfer files and clipboard content without requiring cloud services, accounts, or an internet connection.
 
 ## Features
 
-- Automatic LAN device discovery
-- Fast peer-to-peer file transfers
-- Send individual files or entire folders
-- Receive files with optional transfer approval
-- SHA-256 integrity verification
-- Background discoverability while the app is running
-- Configurable download location
-- Transfer history
-- Device management
-- Dark interface matching CipherShare Desktop
+* Automatic LAN device discovery
+* Fast peer-to-peer file transfers
+* Send individual files or entire folders
+* Clipboard transfers
+* Receive files with optional transfer approval
+* SHA-256 integrity verification
+* Background discoverability while the app is running
+* Configurable download location
+* Transfer history
+* Device management
+* Dark interface matching CipherShare Desktop
+* Proper app termination when closed by the user
 
 ## Privacy
 
-CipherShare transfers files directly between your devices.
+CipherShare transfers files and clipboard content directly between your devices.
 
-- No cloud servers
-- No accounts
-- No telemetry
-- No data collection
-- No internet connection required for local transfers
+* No cloud servers
+* No accounts
+* No telemetry
+* No data collection
+* No internet connection required for local transfers
 
-Your files never leave your local network.
+Your files and clipboard content never leave your local network.
 
 ## Compatibility
 
